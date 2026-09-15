@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Sequence, override
+from typing import Literal, Sequence, override
 
 from dublib.web_requestor import WebRequestor
 from dublib.web_requestor.config.authorization import Bearer
@@ -8,21 +7,8 @@ from dublib.web_requestor.config.authorization import Bearer
 from melon.core.base.source_operator import BaseSourceOperator
 
 from .settings import CustomSettingsModel
-
-#==========================================================================================#
-# >>>>> ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ ДАННЫХ <<<<< #
-#==========================================================================================#
-
-@dataclass(frozen = True)
-class SlideURI:
-	"""URI слайда."""
-
-	server: str
-	uri: str
-
-#==========================================================================================#
-# >>>>> ОСНОВНОЙ КЛАСС <<<<< #
-#==========================================================================================#
+from .src.enums import ImagesServersTypes
+from .src.structs import ImageServerData
 
 class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 	"""Оператор источника."""
@@ -35,22 +21,22 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 	def api_domain(self) -> str:
 		"""Домен для API."""
 
-		if self.__SiteID in (2, 4):
+		if self.__site_id in (2, 4):
 			return "hapi.hentaicdn.org"
 
 		return "api.cdnlibs.org"
 
 	@property
-	def site_id(self) -> int | None:
+	def site_id(self) -> Literal[1, 2, 3, 4] | None:
 		"""ID официального сайта."""
 
-		return self.__SiteID
+		return self.__site_id
 
 	#==========================================================================================#
 	# >>>>> ПРИВАТНЫЕ МЕТОДЫ <<<<< #
 	#==========================================================================================#
 
-	def __StringToDate(self, date_str: str) -> datetime:
+	def __string_to_date(self, date_str: str) -> datetime:
 		"""
 		Парсит строковое представление даты и времени **MangaLib** в объект.
 
@@ -60,9 +46,9 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 		:rtype: datetime
 		"""
 
-		DatePattern = "%Y-%m-%dT%H:%M:%S.%fZ"
+		pattern: str = "%Y-%m-%dT%H:%M:%S.%fZ"
 
-		return datetime.strptime(date_str, DatePattern)
+		return datetime.strptime(date_str, pattern)
 
 	#==========================================================================================#
 	# >>>>> ПЕРЕОПРЕДЕЛЯЕМЫЕ МЕТОДЫ <<<<< #
@@ -71,7 +57,7 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 	@override
 	def _authorize(self):
 		"""
-		Выполняется после `_InitializeRequestor()` и обёрнут для отлова исключений `TokenExpired`.
+		Выполняется после `_InitializeRequestor()` и обёрнут для отлова исключений `TokenExpiredError`.
 
 		Используется для установки авторизации на основе заголовка _Authorization_.
 		"""
@@ -113,7 +99,7 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 				UpdatesPage = Response.json["data"]
 		
 				for UpdateNote in UpdatesPage:
-					Delta = CurrentDate - self.__StringToDate(
+					Delta = CurrentDate - self.__string_to_date(
 						UpdateNote["last_item_at"]
 					)
 		
@@ -199,13 +185,13 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 	def _post_init(self):
 		"""Метод, выполняющийся после инициализации объекта."""
 
-		self.__Sites: dict[str, int] = {
+		self.__sites: dict[str, Literal[1, 2, 3, 4]] = {
 			"mangalib.me": 1,
 			"slashlib.me": 2,
 			"v2.shlib.life": 2,
 			"hentailib.me": 4
 		}
-		self.__SiteID: int | None = self.get_site_id()
+		self.__site_id: Literal[1, 2, 3, 4] | None = self.get_site_id()
 
 	@override
 	def _post_mirror_changing(self, mirror: str | None):
@@ -216,14 +202,14 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 		:type mirror: str | None
 		"""
 
-		self.__SiteID = self.get_site_id(mirror)
+		self.__site_id = self.get_site_id(mirror)
+		
+		if self.__site_id:
 
-		if self.__SiteID:
-
-			if self.__SiteID in (2, 4) and not self.settings.custom.token:
+			if self.__site_id in (2, 4) and not self.settings.custom.token:
 				self.portals.authorization_required(f"Domain \"{mirror}\" requires authorization.")
 
-			self.requestor.config.headers.set("site-id", self.__SiteID)
+			self.requestor.config.headers.set("site-id", self.__site_id)
 		else:
 			self.requestor.config.headers.remove("site-id")
 
@@ -231,60 +217,65 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 	# >>>>> ПУБЛИЧНЫЕ МЕТОДЫ <<<<< #
 	#==========================================================================================#
 
-	def get_images_servers(self, server_id: str | None = None, all_sites: bool = False) -> list[str]:
+	def get_images_servers(self, server_type: ImagesServersTypes | None = None, site_id: Literal[1, 2, 3, 4] | None = None) -> tuple[ImageServerData, ...]:
 		"""
-		Возвращает домены серверов хранения изображений.
+		Получает последовательность доменов серверов изображений.
 
-		:param server_id: ID сервера, для которого получаются домены.
-		:type server_id: str | None
-		:param all_sites: Указывает, что домены нужно получить для всех сайтов.
-		:type all_sites: bool
-		:return: Набор доменов.
-		:rtype: list[str]
+		:param server_type: Тип сервера изображений. По умолчанию определяется настройками парсера.
+		:type server_type: ImagesServersTypes | None
+		:param site_id: ID сайта, для которого запрашиваются домены серверов. По умолчанию определяется на основе манифеста.
+		:type site_id: Literal[1, 2, 3, 4] | None
+		:return: Последовательность данных доменов.
+		:rtype: tuple[ImageServerData, ...]
 		"""
 
-		Servers = []
-		CurrentSiteID = self.get_site_id()
-		URL = f"https://{self.api_domain}/api/constants?fields[]=imageServers"
+		if server_type is None: server_type = self.settings.custom.images_server
+		if site_id is None: site_id = self.site_id
+		
+		url: str = f"https://{self.api_domain}/api/constants?fields[]=imageServers"
+		response = self.requestor.get(url)
 
-		Response = self.requestor.get(URL)
+		if not response.ok or not response.json:
+			self.portals.request_error(response, "Unable to request site constants.")
 
-		if Response.ok and Response.json:
-			Data = Response.json["data"]["imageServers"]
+		data: dict = response.json["data"]
+		servers_data: list[dict] = data["imageServers"]
+		servers: list[ImageServerData] = []
+		
+		for server_data in servers_data:
+			domain: str = server_data["url"]
+			domain = domain.replace("https://", "")
+			
+			servers.append(ImageServerData(
+				server_type = ImagesServersTypes(server_data["id"]),
+				label = server_data["label"],
+				domain = domain,
+				sites = tuple(server_data["site_ids"])
+			))
 
-			for ServerData in Data:
-				if server_id:
-					if (
-						ServerData["id"] == server_id
-						and CurrentSiteID in ServerData["site_ids"]
-					):
-						Servers.append(ServerData["url"])
-					elif ServerData["id"] == server_id and all_sites:
-						Servers.append(ServerData["url"])
+		if server_type:
+			servers = list(filter(lambda server: server.server_type is server_type, servers))
 
-				else:
-					if CurrentSiteID in ServerData["site_ids"] or all_sites:
-						Servers.append(ServerData["url"])
+		if site_id:
+			servers = list(filter(lambda server: site_id in server.sites, servers))
 
-		else:
-			self.portals.request_error(Response, "Unable to request site constants.")
+		return tuple(servers)
 
-		return Servers
-
-	def get_site_id(self, site: str | None = None) -> int | None:
+	def get_site_id(self, site: str | None = None) -> Literal[1, 2, 3, 4] | None:
 		"""
-		Возвращает целочисленный идентификатор сайта.
+		Определяет целочисленный идентификатор сайта.
 
 		:param site: Домен сайта (по умолчанию берётся из манифеста).
 		:type site: str
-		:return: ID сайта или `None` при ошибке.
-		:rtype: int | None
+		:return: ID сайта или `None` при невозможности определения.
+		:rtype: Literal[1, 2, 3, 4] | None
 		"""
 
-		if not site: site = self.manifest.domain
-
-		for Domain in self.__Sites:
-			if Domain in site:
-				return self.__Sites[Domain]
+		if not site:
+			site = self.manifest.domain
+		
+		for domain in self.__sites:
+			if domain in site:
+				return self.__sites[domain]
 
 		return None

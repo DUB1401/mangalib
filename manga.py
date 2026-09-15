@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Literal, cast, override
 
 from dublib.functions.data import zerotify
 
+from melon.core import exceptions
 from melon.core.base.formats.base_format.branch import Branch
 from melon.core.base.formats.base_format.enums import Statuses
 from melon.core.base.formats.manga.chapter import Chapter
@@ -114,7 +115,7 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 		if not Content:
 			return None
 
-		Content = cast(list[dict], Content)
+		Content = cast("list[dict]", Content)
 		DescriptionLines: list[str] = []
 
 		for Element in Content:
@@ -148,7 +149,7 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 
 		return Classificators
 
-	def __GetSlides(self, branch_id: int, chapter: Chapter) -> list[ImageData]:
+	def __get_slides(self, branch_id: int, chapter: Chapter) -> list[ImageData]:
 		"""
 		Получает данные слайдов.
 
@@ -160,31 +161,51 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 		:rtype: list[ImageData]
 		"""
 
-		SourceOperatorObject = cast("SourceOperator", self.source_operator)
-		Title = cast("Manga", self.title)
-
-		Slides: list[ImageData] = []
+		title = cast("Manga", self.title)
 
 		if chapter.extra_data.exists("moderated") and not chapter.extra_data.get("moderated"):
 			self.portals.chapter_skipped(chapter, comment = "Not moderated.")
-			return Slides
+			return []
+
+		params: dict[str, int | str] = {}
+
+		if chapter.number:
+			params["number"] = chapter.number
+		else:
+			raise exceptions.parsing.ParsingError("Missing chapter number. Unable create request params.")
+
+		if chapter.volume:
+			params["volume"] = chapter.volume
+		else:
+			raise exceptions.parsing.ParsingError("Missing volume. Unable create request params.")
+
+		if branch_id != int(f"{title.data.id}0"):
+			params["branch_id"] = branch_id
+
+		response = self.requestor.get(f"https://{self.source_operator.api_domain}/api/manga/{title.data.slug}/chapter", params = params)
+
+		if not response.ok or not response.json:
+			self.portals.request_error(response, "Unable to request chapter content.")
+
+		data: dict = response.json["data"]
+		pages: list[dict] = data.get("pages", ())
+
+		servers = self.source_operator.get_images_servers()
+		images_server: str = tuple(server.domain for server in servers)[0]
 		
-		Server = SourceOperatorObject.get_images_servers(self.settings.custom.server)[0]
-		Branch = "" if branch_id == str(Title.data.id) + "0" else f"&branch_id={branch_id}"
-		URL = f"https://{SourceOperatorObject.api_domain}/api/manga/{Title.data.slug}/chapter?number={chapter.number}&volume={chapter.volume}{Branch}"
-		Response = self.requestor.get(URL)
-		
-		if Response.ok and Response.json:
-			Data = Response.json["data"].setdefault("pages", ())
+		slides: list[ImageData] = []
 
-			for SlideData in Data:
-				ImageBuffer = ImageData(Server + SlideData["url"].replace(" ", "%20"))
-				ImageBuffer.create_resolution(SlideData["width"], SlideData["height"])
-				Slides.append(ImageBuffer)
+		for slide_data in pages:
+			url: str = slide_data["url"]
+			url = url.replace(" ", "%20")
+			url = f"https://{images_server}{url}"
 
-		else: self.portals.request_error(Response, "Unable to request chapter content.", exception = False)
+			image = ImageData(url)
+			image.create_resolution(slide_data.get("width"), slide_data.get("height"))
 
-		return Slides
+			slides.append(image)
+
+		return slides
 
 	def __GetStatus(self, data: dict) -> Statuses | None:
 		"""
@@ -287,8 +308,8 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 		:rtype: str | None
 		"""
 
-		chapter.set_slides(self.__GetSlides(branch.id, chapter))
-
+		chapter.set_slides(self.__get_slides(branch.id, chapter))
+		
 		return None
 
 	@override
@@ -301,6 +322,7 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 
 		if Data:
 			Title.data.set_id(Data["id"])
+			Title.data.set_slug(Data["slug_url"])
 			Title.data.set_content_language("rus")
 			Title.data.set_localized_name(Data["rus_name"])
 			Title.data.set_eng_name(Data["eng_name"])
