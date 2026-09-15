@@ -253,11 +253,9 @@ class SourceOperator(BaseSourceOperator[CustomSettingsModel]):
 				sites = tuple(server_data["site_ids"])
 			))
 
-		if server_type:
-			servers = list(filter(lambda server: server.server_type is server_type, servers))
-
-		if site_id:
-			servers = list(filter(lambda server: site_id in server.sites, servers))
+		
+		servers = list(filter(lambda server: server.server_type is server_type, servers))
+		servers = list(filter(lambda server: site_id in server.sites, servers))
 
 		return tuple(servers)
 

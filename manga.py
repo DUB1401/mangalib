@@ -13,7 +13,7 @@ from melon.core.base.structs.image import ImageData
 if TYPE_CHECKING:
 	from melon.core.base.formats.manga.controller import Manga
 
-	from . import SourceOperator
+	from . import SourceOperator as SourceOperator
 	from .settings import CustomSettingsModel as CustomSettingsModel
 
 class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
@@ -59,11 +59,10 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 	def __GetBranches(self):
 		"""Получает ветви контента тайтла и устанавливает их."""
 
-		SourceOperatorObject = cast("SourceOperator", self.source_operator)
 		Title = cast("Manga", self.title)
 
 		Branches: dict[int, Branch] = {}
-		Response = self.requestor.get(f"https://{SourceOperatorObject.api_domain}/api/manga/{Title.data.slug}/chapters")
+		Response = self.requestor.get(f"https://{self.source_operator.api_domain}/api/manga/{Title.data.slug}/chapters")
 		
 		if Response.ok and Response.json:
 			Data = Response.json["data"]
@@ -238,7 +237,6 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 		:rtype: dict | None
 		"""
 
-		SourceOperatorObject = cast("SourceOperator", self.source_operator)
 		Title = cast("Manga", self.title)
 		
 		Query = (
@@ -254,7 +252,7 @@ class Parser(BaseMangaParser["SourceOperator", "CustomSettingsModel"]):
 			"manga_status_id",
 			"status_id"
 		)
-		URL = f"https://{SourceOperatorObject.api_domain}/api/manga/{Title.data.slug}?" + "".join(f"fields[]={Item}&" for Item in Query).rstrip("&")
+		URL = f"https://{self.source_operator.api_domain}/api/manga/{Title.data.slug}?" + "".join(f"fields[]={Item}&" for Item in Query).rstrip("&")
 		Response = self.requestor.get(URL)
 
 		if Response.ok and Response.json:
